@@ -493,6 +493,24 @@ AIELegalizerInfo::AIELegalizerInfo(const AIEBaseSubtarget &ST) {
         .clampMaxNumElements(0, S16, 32)
         .clampMaxNumElements(0, S32, 16)
         .custom();
+
+    getActionDefinitionsBuilder(G_SHUFFLE_VECTOR)
+        .unsupportedIf(IsNotValidDestinationVector)
+        .lowerIf([=](const LegalityQuery &Query) {
+          const LLT DstTy = Query.Types[0];
+          const LLT SrcTy = Query.Types[1];
+
+          return DstTy.isVector() && SrcTy.isScalar() &&
+                 (2 * SrcTy.getSizeInBits()) == DstTy.getSizeInBits();
+        })
+        .clampMinNumElements(0, S8, 32)
+        .clampMinNumElements(0, S16, 16)
+        .clampMinNumElements(0, S32, 8)
+        // Shuffle acts a concat
+        .lowerIf(isValidVectorMergeUnmergeOp(0, 1))
+        .lowerIf([=](const LegalityQuery &Query) {
+          return Query.Types[0] == Query.Types[1];
+        });
   }
 
   getActionDefinitionsBuilder(G_JUMP_TABLE).custom();
