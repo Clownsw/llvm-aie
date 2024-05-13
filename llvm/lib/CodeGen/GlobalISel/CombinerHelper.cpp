@@ -338,6 +338,55 @@ bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
   return false;
 }
 
+bool CombinerHelper::matchCombineShuffleVectorSimple(
+    MachineInstr &MI, std::function<std::optional<int32_t>()> Generator,
+    const size_t TargetDstSize) {
+  assert(MI.getOpcode() == TargetOpcode::G_SHUFFLE_VECTOR &&
+         "Invalid instruction kind");
+  LLT DstType = MRI.getType(MI.getOperand(0).getReg());
+  Register Src1 = MI.getOperand(1).getReg();
+  LLT SrcType = MRI.getType(Src1);
+  // As bizarre as it may look, shuffle vector can actually produce
+  // scalar! This is because at the IR level a <1 x ty> shuffle
+  // vector is perfectly valid.
+  unsigned DstNumElts = DstType.isVector() ? DstType.getNumElements() : 1;
+  unsigned SrcNumElts = SrcType.isVector() ? SrcType.getNumElements() : 1;
+
+  // If the resulting vector is smaller than the size of the source
+  // vectors being concatenated, we won't be able to replace the
+  // shuffle vector into a concat_vectors.
+  //
+  // Note: We may still be able to produce a concat_vectors fed by
+  //       extract_vector_elt and so on. It is less clear that would
+  //       be better though, so don't bother for now.
+  //
+  // If the destination is a scalar, the size of the sources doesn't
+  // matter. we will lower the shuffle to a plain copy. This will
+  // work only if the source and destination have the same size. But
+  // that's covered by the next condition.
+  //
+  // TODO: If the size between the source and destination don't match
+  //       we could still emit an extract vector element in that case.
+  if ((DstNumElts < TargetDstSize) && DstNumElts != 1)
+    return false;
+
+  ArrayRef<int> Mask = MI.getOperand(3).getShuffleMask();
+  for (unsigned i = 0; i != DstNumElts; ++i) {
+    int Idx = Mask[i];
+    const int32_t ShiftIndex = Generator().value_or(-1);
+
+    // Undef value.
+    if (Idx < 0 || ShiftIndex < 0)
+      continue;
+
+    // Ensure the indices in each SrcType sized piece are seqential and that
+    // the same source is used for the whole piece.
+    if ((Idx % SrcNumElts != (ShiftIndex % SrcNumElts)))
+      return false;
+  }
+
+  return true;
+}
 bool CombinerHelper::matchCombineShuffleVector(
     MachineInstr &MI, SmallVectorImpl<Register> &Ops,
     std::function<std::optional<int32_t>()> Generator,

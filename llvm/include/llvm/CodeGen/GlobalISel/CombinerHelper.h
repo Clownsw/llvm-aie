@@ -260,6 +260,10 @@ public:
   matchCombineShuffleVector(MachineInstr &MI, SmallVectorImpl<Register> &Ops,
                             std::function<std::optional<int32_t>()> Generator,
                             const size_t TargetDstSize);
+  bool matchCombineShuffleVectorSimple(
+      MachineInstr &MI, std::function<std::optional<int32_t>()> Generator,
+      const size_t TargetDstSize);
+
   /// Replace \p MI with a concat_vectors with \p Ops.
   void applyCombineShuffleVector(MachineInstr &MI,
                                  const ArrayRef<Register> Ops);
