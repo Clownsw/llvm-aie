@@ -323,11 +323,15 @@ Register CombinerHelper::createUnmergeValue(MachineInstr &MI,
   Builder.setInsertPt(*MI.getParent(), MI);
   const LLT DstTy = MRI.getType(DstReg);
   const LLT SrcTy = MRI.getType(SrcReg);
-  assert((SrcTy.getNumElements() % DstTy.getNumElements()) == 0 &&
+  assert((!DstTy.isVector() ||
+          (SrcTy.getNumElements() % DstTy.getNumElements()) == 0) &&
          "destination vector must divide source cleanly");
 
   const unsigned HalfElements = SrcTy.getNumElements() / 2;
-  const LLT HalfSizeTy = LLT::fixed_vector(HalfElements, SrcTy.getScalarType());
+  const LLT ScalarTy = SrcTy.getScalarType();
+  const LLT HalfSizeTy = (HalfElements == 1)
+                             ? ScalarTy
+                             : LLT::fixed_vector(HalfElements, ScalarTy);
   const Register TmpReg = MRI.createGenericVirtualRegister(HalfSizeTy);
   Register TargetReg = DstReg;
   if (DstTy != HalfSizeTy) {
@@ -337,7 +341,8 @@ Register CombinerHelper::createUnmergeValue(MachineInstr &MI,
   // Each destination fits n times into the source and each iteration we exactly
   // half the source. Therefore we need to pick on which side we want to iterate
   // on.
-  const uint32_t Position = DestinationIndex * DstTy.getNumElements();
+  const uint32_t DstNumElements = DstTy.isVector() ? DstTy.getNumElements() : 1;
+  const uint32_t Position = DestinationIndex * DstNumElements;
   if (Position < (SrcTy.getNumElements() / 2))
     Builder.buildInstr(TargetOpcode::G_UNMERGE_VALUES, {TargetReg, TmpReg},
                        {SrcReg});
@@ -345,7 +350,7 @@ Register CombinerHelper::createUnmergeValue(MachineInstr &MI,
     Builder.buildInstr(TargetOpcode::G_UNMERGE_VALUES, {TmpReg, TargetReg},
                        {SrcReg});
 
-  if (DstTy != HalfSizeTy) {
+  if (HalfSizeTy.isVector() && DstTy != HalfSizeTy) {
     return createUnmergeValue(MI, TargetReg, DstReg, DestinationIndex);
   }
 
@@ -371,6 +376,29 @@ bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
     return true;
   }
 
+  // {1, 2, ..., |DstVector|} -> G_UNMERGE_VALUES
+  // Extracts the first chunk of the same size of the destination vector from the source
+  std::function<std::optional<int32_t>()> FirstQuarter =
+      adderGenerator(0, DstNumElts - 1, 1);
+  if (matchCombineShuffleVectorSimple(MI, FirstQuarter, DstNumElts - 1)) {
+    if (SrcTy == DstTy || ((SrcNumElts / 2) % 2) != 0)
+      return false;
+    createUnmergeValue(MI, MI.getOperand(1).getReg(), DstReg, 0);
+    MI.eraseFromParent();
+    return true;
+  }
+
+  // {|DstVector|, |DstVector|+1, ..., 2 * |DstVector|} -> G_UNMERGE_VALUES
+  // Extracts the second chunk of the same size of the destination vector from the source
+  std::function<std::optional<int32_t>()> SecondQuarter =
+      adderGenerator(DstNumElts, (DstNumElts * 2) - 1, 1);
+  if (matchCombineShuffleVectorSimple(MI, SecondQuarter, DstNumElts - 1)) {
+    if (((SrcNumElts / 2) % 2) != 0)
+      return false;
+    createUnmergeValue(MI, MI.getOperand(1).getReg(), DstReg, 1);
+    MI.eraseFromParent();
+    return true;
+  }
   return false;
 }
 
@@ -406,6 +434,11 @@ bool CombinerHelper::matchCombineShuffleVectorSimple(
   if ((DstNumElts < TargetDstSize) && DstNumElts != 1)
     return false;
 
+  // Check that the shuffle mask can be broken evenly between the
+  // different sources.
+  if ((SrcNumElts % DstNumElts) != 0)
+    return false;
+
   ArrayRef<int> Mask = MI.getOperand(3).getShuffleMask();
   for (unsigned i = 0; i != DstNumElts; ++i) {
     int Idx = Mask[i];
@@ -417,7 +450,7 @@ bool CombinerHelper::matchCombineShuffleVectorSimple(
 
     // Ensure the indices in each SrcType sized piece are seqential and that
     // the same source is used for the whole piece.
-    if ((Idx % SrcNumElts != (ShiftIndex % SrcNumElts)))
+    if (Idx != ShiftIndex)
       return false;
   }
 
