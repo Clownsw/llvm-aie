@@ -316,6 +316,42 @@ adderGenerator(const int32_t From, const int32_t To, const int32_t StepSize) {
   };
 }
 
+Register CombinerHelper::createUnmergeValue(MachineInstr &MI,
+                                            const Register SrcReg,
+                                            const Register DstReg,
+                                            uint8_t DestinationIndex) {
+  Builder.setInsertPt(*MI.getParent(), MI);
+  const LLT DstTy = MRI.getType(DstReg);
+  const LLT SrcTy = MRI.getType(SrcReg);
+  assert((SrcTy.getNumElements() % DstTy.getNumElements()) == 0 &&
+         "destination vector must divide source cleanly");
+
+  const unsigned HalfElements = SrcTy.getNumElements() / 2;
+  const LLT HalfSizeTy = LLT::fixed_vector(HalfElements, SrcTy.getScalarType());
+  const Register TmpReg = MRI.createGenericVirtualRegister(HalfSizeTy);
+  Register TargetReg = DstReg;
+  if (DstTy != HalfSizeTy) {
+    TargetReg = MRI.createGenericVirtualRegister(HalfSizeTy);
+  }
+
+  // Each destination fits n times into the source and each iteration we exactly
+  // half the source. Therefore we need to pick on which side we want to iterate
+  // on.
+  const uint32_t Position = DestinationIndex * DstTy.getNumElements();
+  if (Position < (SrcTy.getNumElements() / 2))
+    Builder.buildInstr(TargetOpcode::G_UNMERGE_VALUES, {TargetReg, TmpReg},
+                       {SrcReg});
+  else
+    Builder.buildInstr(TargetOpcode::G_UNMERGE_VALUES, {TmpReg, TargetReg},
+                       {SrcReg});
+
+  if (DstTy != HalfSizeTy) {
+    return createUnmergeValue(MI, TargetReg, DstReg, DestinationIndex);
+  }
+
+  return DstReg;
+}
+
 bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
   SmallVector<Register, 4> Ops;
 
