@@ -39,6 +39,8 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cmath>
+#include <cstdint>
+#include <functional>
 #include <optional>
 #include <tuple>
 
@@ -301,17 +303,45 @@ void CombinerHelper::applyCombineConcatVectors(
   replaceRegWith(MRI, DstReg, NewDstReg);
 }
 
+// Create a stream from 0 to n with a specified number of steps
+std::function<std::optional<int32_t>()>
+adderGenerator(const int32_t From, const int32_t To, const int32_t StepSize) {
+  int32_t Counter = From;
+  return [Counter, To, StepSize]() mutable {
+    std::optional<int32_t> OldCount = std::optional<int32_t>(Counter);
+    Counter += StepSize;
+    if (OldCount == (To + StepSize))
+      OldCount = {};
+    return OldCount;
+  };
+}
+
 bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
   SmallVector<Register, 4> Ops;
-  if (matchCombineShuffleVector(MI, Ops)) {
+
+  const Register DstReg = MI.getOperand(0).getReg();
+  const LLT DstTy = MRI.getType(DstReg);
+  const LLT SrcTy = MRI.getType(MI.getOperand(1).getReg());
+  const unsigned DstNumElts = DstTy.isVector() ? DstTy.getNumElements() : 1;
+  const unsigned SrcNumElts = SrcTy.isVector() ? SrcTy.getNumElements() : 1;
+
+  // {1, 2, ..., n} -> G_CONCAT_VECTOR
+  // Turns a shuffle vector that only increments into a concat vector
+  // instruction
+  std::function<std::optional<int32_t>()> CountUp =
+      adderGenerator(0, DstNumElts - 1, 1);
+  if (matchCombineShuffleVector(MI, Ops, CountUp, 2 * SrcNumElts)) {
     applyCombineShuffleVector(MI, Ops);
     return true;
   }
+
   return false;
 }
 
-bool CombinerHelper::matchCombineShuffleVector(MachineInstr &MI,
-                                               SmallVectorImpl<Register> &Ops) {
+bool CombinerHelper::matchCombineShuffleVector(
+    MachineInstr &MI, SmallVectorImpl<Register> &Ops,
+    std::function<std::optional<int32_t>()> Generator,
+    const size_t TargetDstSize) {
   assert(MI.getOpcode() == TargetOpcode::G_SHUFFLE_VECTOR &&
          "Invalid instruction kind");
   LLT DstType = MRI.getType(MI.getOperand(0).getReg());
@@ -338,12 +368,12 @@ bool CombinerHelper::matchCombineShuffleVector(MachineInstr &MI,
   //
   // TODO: If the size between the source and destination don't match
   //       we could still emit an extract vector element in that case.
-  if (DstNumElts < 2 * SrcNumElts && DstNumElts != 1)
+  if ((DstNumElts < TargetDstSize) && DstNumElts != 1)
     return false;
 
   // Check that the shuffle mask can be broken evenly between the
   // different sources.
-  if (DstNumElts % SrcNumElts != 0)
+  if ((DstNumElts % SrcNumElts) != 0)
     return false;
 
   // Mask length is a multiple of the source vector length.
@@ -354,17 +384,21 @@ bool CombinerHelper::matchCombineShuffleVector(MachineInstr &MI,
   ArrayRef<int> Mask = MI.getOperand(3).getShuffleMask();
   for (unsigned i = 0; i != DstNumElts; ++i) {
     int Idx = Mask[i];
+    const int32_t ShiftIndex = Generator().value_or(-1);
+
     // Undef value.
-    if (Idx < 0)
+    if (Idx < 0 || ShiftIndex < 0)
       continue;
-    // Ensure the indices in each SrcType sized piece are sequential and that
+
+    // Ensure the indices in each SrcType sized piece are seqential and that
     // the same source is used for the whole piece.
-    if ((Idx % SrcNumElts != (i % SrcNumElts)) ||
-        (ConcatSrcs[i / SrcNumElts] >= 0 &&
-         ConcatSrcs[i / SrcNumElts] != (int)(Idx / SrcNumElts)))
+    if ((Idx % SrcNumElts != (ShiftIndex % SrcNumElts)) ||
+        (ShiftIndex >= DstNumElts) ||
+        (ConcatSrcs[ShiftIndex / SrcNumElts] >= 0 &&
+         ConcatSrcs[ShiftIndex / SrcNumElts] != (int)(Idx / SrcNumElts)))
       return false;
     // Remember which source this index came from.
-    ConcatSrcs[i / SrcNumElts] = Idx / SrcNumElts;
+    ConcatSrcs[ShiftIndex / SrcNumElts] = Idx / SrcNumElts;
   }
 
   // The shuffle is concatenating multiple vectors together.
