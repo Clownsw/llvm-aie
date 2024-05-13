@@ -414,6 +414,35 @@ bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
     MI.eraseFromParent();
     return true;
   }
+
+  // {1, 2, ..., n/4, n/2, n/2+1, .... 3n/4} -> G_UNMERGE_VALUES
+  // Take the first halfs of the two vectors and concatenate them into one
+  // vector.
+  std::function<std::optional<int32_t>()> FirstEightA =
+      adderGenerator(0, (DstNumElts / 2) - 1, 1);
+  std::function<std::optional<int32_t>()> FirstEightB =
+      adderGenerator(DstNumElts, DstNumElts + (DstNumElts / 2) - 1, 1);
+
+  std::function<std::optional<int32_t>()> FirstAndThird =
+      concatGenerators(SmallVector<std::function<std::optional<int32_t>()>>{
+          FirstEightA, FirstEightB});
+  if (matchCombineShuffleVectorSimple(MI, FirstAndThird,
+                                      (DstNumElts / 2) - 1)) {
+    if (DstNumElts <= 2)
+      return false;
+    const Register DstReg = MI.getOperand(0).getReg();
+    const LLT HalfSrcTy =
+        LLT::fixed_vector(SrcNumElts / 2, SrcTy.getScalarType());
+    const Register HalfOfA =
+        createUnmergeValue(MI, MI.getOperand(1).getReg(),
+                           MRI.createGenericVirtualRegister(HalfSrcTy), 0);
+    const Register HalfOfB =
+        createUnmergeValue(MI, MI.getOperand(2).getReg(),
+                           MRI.createGenericVirtualRegister(HalfSrcTy), 0);
+    Builder.buildMergeLikeInstr(DstReg, {HalfOfA, HalfOfB});
+    MI.eraseFromParent();
+    return true;
+  }
   return false;
 }
 
