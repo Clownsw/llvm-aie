@@ -316,6 +316,21 @@ adderGenerator(const int32_t From, const int32_t To, const int32_t StepSize) {
   };
 }
 
+// Move to the next generator if it is exhausted allowing to chain generators
+std::function<std::optional<int32_t>()> concatGenerators(
+    SmallVector<std::function<std::optional<int32_t>()>> Generators) {
+  auto *GeneratorIterator = Generators.begin();
+
+  return [GeneratorIterator, Generators]() mutable {
+    std::optional<int32_t> GenValue = (*GeneratorIterator)();
+    if (!GenValue.has_value() && GeneratorIterator != Generators.end()) {
+      GeneratorIterator++;
+      GenValue = (*GeneratorIterator)();
+    }
+    return GenValue;
+  };
+}
+
 Register CombinerHelper::createUnmergeValue(MachineInstr &MI,
                                             const Register SrcReg,
                                             const Register DstReg,
