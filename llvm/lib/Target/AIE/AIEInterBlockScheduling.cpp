@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <memory>
+#include <queue>
 
 #define DEBUG_TYPE "machine-scheduler"
 
@@ -55,15 +56,91 @@ void InterBlockScheduling::markEpilogueBlocks() {
   }
 }
 
+std::map<MachineBasicBlock *, LivePhysRegs> calculateLiveOuts(MachineFunction *MF) {
+  std::queue<MachineBasicBlock *> WorkList;
+  std::set<MachineBasicBlock *> WorkListSet;
+  std::map<MachineBasicBlock *, LivePhysRegs> LiveIns;
+  std::map<MachineBasicBlock *, LivePhysRegs> LiveOuts;
+  const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
+  for (MachineBasicBlock *MBB : post_order(MF)) {
+    LiveIns[MBB].init(*TRI);
+    LiveOuts[MBB].init(*TRI);
+    WorkListSet.insert(MBB);
+    WorkList.push(MBB);
+  }
+  while (!WorkList.empty()) {
+    MachineBasicBlock *MBB = WorkList.front();
+    WorkList.pop();
+    WorkListSet.erase(MBB);
+    LivePhysRegs CurrentLive;
+    CurrentLive.init(*TRI);
+
+    // Calculates LiveOuts by iterating over each successor of the current MBB
+    // and adding each successor's LiveIns to the current MBB's LiveOuts.
+    // This ensures LiveOuts is the union of LiveIns of all successor MBBs.
+    for (MachineBasicBlock *Succ : MBB->successors()) {
+      for (MCPhysReg Reg : LiveIns[Succ]) {
+        LiveOuts[MBB].addReg(Reg);
+        CurrentLive.addReg(Reg);
+      }
+    }
+    // Calculates CurrentLive by bottom-up traversal the MBB
+    for (MachineInstr &MI : llvm::reverse(*MBB)) {
+      CurrentLive.stepBackward(MI);
+    }
+    // Checks for convergence of LiveIns of MBB
+    bool Change = false;
+    int LiveInCount = 0;
+    for (MCPhysReg Reg : LiveIns[MBB]) {
+      if (!CurrentLive.contains(Reg)) {
+        Change = true;
+        break;
+      }
+      LiveInCount++;
+    }
+    LiveIns[MBB].init(*TRI);
+    // Updates LiveIns of MBB with CurrentLive
+    for (MCPhysReg Reg : CurrentLive) {
+      LiveInCount--;
+      LiveIns[MBB].addReg(Reg);
+    }
+    if (LiveInCount != 0) {
+      Change = true;
+    }
+    if (Change) {
+      for (MachineBasicBlock *Pred : MBB->predecessors()) {
+        if (WorkListSet.find(Pred) == WorkListSet.end()) {
+          WorkListSet.insert(Pred);
+          WorkList.push(Pred);
+        }
+      }
+    }
+  }
+  return LiveOuts;
+}
+
 void InterBlockScheduling::enterFunction(MachineFunction *MF) {
   DEBUG_BLOCKS(dbgs() << ">> enterFunction " << MF->getName() << "\n");
 
   // Get ourselves a hazard recognizer
   HR = std::make_unique<AIEHazardRecognizer>(MF->getSubtarget());
 
+  const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
+  std::map<MachineBasicBlock *, LivePhysRegs> LiveOuts = calculateLiveOuts(MF);
+
   // Define our universe of blocks
   for (MachineBasicBlock &MBB : *MF) {
-    Blocks.emplace(&MBB, &MBB);
+    auto Itr = Blocks.emplace(&MBB, &MBB).first;
+    auto &BS = Itr->second;
+    BS.LiveOuts.init(*TRI);
+    // Assigns LiveOuts to BlockState
+    for (MCPhysReg Reg : LiveOuts[&MBB]) {
+      BS.LiveOuts.addReg(Reg);
+    }
+    LLVM_DEBUG({
+      dbgs() << MBB.getFullName() << " LiveOuts\n";
+      BS.LiveOuts.dump();
+    });
   }
   if (LoopAware) {
     // Mark epilogues of the loops we found. This is only necessary if
