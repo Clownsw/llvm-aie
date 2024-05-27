@@ -86,11 +86,48 @@ AIE2PreLegalizerCombinerImpl::AIE2PreLegalizerCombinerImpl(
 {
 }
 
+std::function<std::optional<int32_t>()>
+sectionGenerator(const int32_t From, const int32_t To,
+                 const int32_t Partitions) {
+  int32_t RoundSize = To / Partitions;
+  int32_t Index = From;
+  return [RoundSize, Index, Partitions, To]() mutable {
+    int32_t Next = (Index / Partitions) + RoundSize * (Index % Partitions) +
+                   (Index % Partitions);
+    std::optional<int32_t> Return = std::optional<int32_t>(Next);
+    if (Index++ == To)
+      Return = {};
+    return Return;
+  };
+}
+
 bool AIE2PreLegalizerCombinerImpl::tryCombineShuffleVector(
     MachineInstr &MI) const {
+  const Register DstReg = MI.getOperand(0).getReg();
+  const LLT DstTy = MRI.getType(DstReg);
+  const LLT SrcTy = MRI.getType(MI.getOperand(1).getReg());
+  const unsigned DstNumElts = DstTy.isVector() ? DstTy.getNumElements() : 1;
+  const unsigned SrcNumElts = SrcTy.isVector() ? SrcTy.getNumElements() : 1;
+  MachineIRBuilder MIB(MI);
+  MachineRegisterInfo &MRI = *MIB.getMRI();
+
   if (Helper.tryCombineShuffleVector(MI))
     return true;
 
+  std::function<std::optional<int32_t>()> FourPartitions =
+      sectionGenerator(0, DstNumElts - 1, 4);
+  if (Helper.matchCombineShuffleVectorSimple(MI, FourPartitions, DstNumElts)) {
+    const Register Src1 = MI.getOperand(1).getReg();
+    const Register Src2 = MI.getOperand(2).getReg();
+    const Register ShuffleModeReg =
+        MRI.createGenericVirtualRegister(LLT::scalar(32));
+
+    MIB.buildConstant(ShuffleModeReg, 29);
+    MIB.buildInstr(AIE2::G_AIE_VSHUFFLE, {DstReg},
+                   {Src1, Src2, ShuffleModeReg});
+    MI.eraseFromParent();
+    return true;
+  }
   return false;
 }
 bool AIE2PreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
