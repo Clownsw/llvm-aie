@@ -79,6 +79,14 @@ void AIEBaseInstrInfo::insertNoop(MachineBasicBlock &MBB,
 bool AIEBaseInstrInfo::reverseBranchCondition(
     SmallVectorImpl<MachineOperand> &Cond) const {
   assert((Cond.size() == 2) && "Invalid branch condition!");
+  // TODO We are returning Success in analyzeBranch for PseudoLoopEnd
+  // which means we should be able to reverse the branch. Currently we are
+  // supporting single BB loop for Zero-overhead loop, and there's no block
+  // reordering that can make the loop block the fallthrough of the block
+  // itself. Once we support multi BB, we will need to support
+  // reverseBranchCondition.
+  // For now, the PseudoLoopEnd opcode will trigger an abort in
+  // getOppositeBranchOpcode().
   Cond[0].setImm(getOppositeBranchOpcode(Cond[0].getImm()));
   return false;
 }
@@ -91,8 +99,8 @@ static void parseCondBranch(MachineInstr &LastInst, MachineBasicBlock *&Target,
   // Block ends with fall-through condbranch.
   assert(LastInst.getDesc().isConditionalBranch() &&
          "Unknown conditional branch");
-  assert((Cond.size() == 2 || Cond.size() == 0 || Cond.size() == 3) &&
-         "AIE branch conditions have two components!");
+  // We are supposed to compose Cond here. Why would it contain something?
+  assert(Cond.size() == 0 && "Unexpected information in Cond");
   Target = LastInst.getOperand(1).getMBB();
   Cond.push_back(MachineOperand::CreateImm(LastInst.getOpcode()));
   Cond.push_back(LastInst.getOperand(0));
@@ -170,8 +178,11 @@ bool AIEBaseInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
   if (NumTerminators == 1 && I->getDesc().isConditionalBranch()) {
     if (isHardwareLoopEnd(I->getOpcode())) {
       TBB = I->getOperand(0).getMBB();
+      // The machine verifier expects a non-empty Cond array, and we need to
+      // supply enough information to reconstruct this instruction.
+      // The basic block target is provided in the interfaces so we don't need
+      // to push that
       Cond.push_back(MachineOperand::CreateImm(I->getOpcode()));
-      Cond.push_back(I->getOperand(0));
       Cond.push_back(I->getOperand(1));
       return Success;
     }
@@ -182,18 +193,18 @@ bool AIEBaseInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
   // Handle a conditional branch followed by an unconditional branch.
   if (NumTerminators == 2 && std::prev(I)->getDesc().isConditionalBranch() &&
       I->getDesc().isUnconditionalBranch()) {
-    // PseudoLoopEnd
-    if (isHardwareLoopEnd(std::prev(I)->getOpcode())) {
-      TBB = std::prev(I)->getOperand(0).getMBB();
-      Cond.push_back(MachineOperand::CreateImm(std::prev(I)->getOpcode()));
-      Cond.push_back(std::prev(I)->getOperand(0));
-      Cond.push_back(std::prev(I)->getOperand(1));
-    } else
+    auto Prev = std::prev(I);
+    if (isHardwareLoopEnd(Prev->getOpcode())) {
+      // PseudoLoopEnd
+      TBB = Prev->getOperand(0).getMBB();
+      Cond.push_back(MachineOperand::CreateImm(Prev->getOpcode()));
+      Cond.push_back(Prev->getOperand(1));
+    } else {
       // JNZD
-      if (!(std::prev(I)->getOperand(1).isMBB()))
+      if (!Prev->getOperand(1).isMBB())
         return Unhandled;
-      else
-        parseCondBranch(*std::prev(I), TBB, Cond);
+      parseCondBranch(*Prev, TBB, Cond);
+    }
 
     // We might have unconditional branches to symbols that aren't
     // Basic Blocks because of tail call elimination.
@@ -252,8 +263,6 @@ unsigned AIEBaseInstrInfo::removeBranch(MachineBasicBlock &MBB,
 unsigned AIEBaseInstrInfo::insertBranch(
     MachineBasicBlock &MBB, MachineBasicBlock *TBB, MachineBasicBlock *FBB,
     ArrayRef<MachineOperand> Cond, const DebugLoc &DL, int *BytesAdded) const {
-  // Cond[0] contains the branch opcode (BEQZ, BNEZ)
-  // Cond[1] contains the condition register.
   if (BytesAdded)
     *BytesAdded = 0;
 
@@ -267,17 +276,20 @@ unsigned AIEBaseInstrInfo::insertBranch(
       *BytesAdded += getInstSizeInBytes(MI);
     return 1;
   }
+  assert(Cond.size() == 2);
 
-  if (Cond.size() == 3) {
-    BuildMI(&MBB, DL, get(Cond[0].getImm())).addMBB(TBB).add(Cond[2]);
-    return 1;
-  }
-
-  // Either a one or two-way conditional branch.
+  // Cond[0] contains the branch opcode (JZ, JNZ, PseudoLoopEnd)
+  // Cond[1] contains opcode dependent information, the last-bundle symbol for
+  // PseudoLoopEnd, the condition register for JZ/JNZ
   unsigned Opc = Cond[0].getImm();
-  MachineInstr &CondMI = *BuildMI(&MBB, DL, get(Opc)).add(Cond[1]).addMBB(TBB);
+  MachineInstrBuilder CBB = BuildMI(&MBB, DL, get(Opc));
+  if (isHardwareLoopEnd(Opc)) {
+    CBB.addMBB(TBB).add(Cond[1]);
+  } else {
+    CBB.add(Cond[1]).addMBB(TBB);
+  }
   if (BytesAdded)
-    *BytesAdded += getInstSizeInBytes(CondMI);
+    *BytesAdded += getInstSizeInBytes(*CBB);
 
   // One-way conditional branch.
   if (!FBB)
@@ -573,9 +585,9 @@ std::optional<int> AIEBaseInstrInfo::getSignedOperandLatency(
     // Note this is purely cosmetic. If the instructions were to be re-ordered,
     // nothing would really happen because meta instructions are not emitted.
     // See schedule/meta_instrs.mir.
-    if (SrcMI.isMetaInstruction())
+    if (SrcMI.isMetaInstruction() || isHardwareLoopStart(SrcMI.getOpcode()))
       return 1;
-    if (DstMI.isMetaInstruction())
+    if (DstMI.isMetaInstruction() || isHardwareLoopStart(DstMI.getOpcode()))
       return 0;
 
     if (SrcClass == 0 && !SrcMI.isMetaInstruction()) {
