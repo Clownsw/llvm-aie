@@ -108,6 +108,11 @@ BitVector AIE2RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   ReserveRegs(AIE2::eRRegClass, ReservedGPRs);
   ReserveRegs(AIE2::eDRegClass, ReservedMODs);
 
+  // Mark the hardware loop related register as reserved,
+  // otherwise they are considered dead
+  markSuperRegs(Reserved, AIE2::LC);
+  markSuperRegs(Reserved, AIE2::LS);
+  markSuperRegs(Reserved, AIE2::LE);
   assert(checkAllSuperRegsMarked(Reserved));
   return Reserved;
 }
