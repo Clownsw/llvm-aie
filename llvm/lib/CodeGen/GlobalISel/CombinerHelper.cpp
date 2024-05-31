@@ -381,11 +381,13 @@ bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
   const unsigned DstNumElts = DstTy.isVector() ? DstTy.getNumElements() : 1;
   const unsigned SrcNumElts = SrcTy.isVector() ? SrcTy.getNumElements() : 1;
 
+  // type helper
+  using generator = std::function<std::optional<int32_t>()>;
+
   // {1, 2, ..., n} -> G_CONCAT_VECTOR
   // Turns a shuffle vector that only increments into a concat vector
   // instruction
-  std::function<std::optional<int32_t>()> CountUp =
-      adderGenerator(0, DstNumElts - 1, 1);
+  generator CountUp = adderGenerator(0, DstNumElts - 1, 1);
   if (matchCombineShuffleVector(MI, Ops, CountUp, 2 * SrcNumElts)) {
     applyCombineShuffleVector(MI, Ops);
     return true;
@@ -393,8 +395,7 @@ bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
 
   // {1, 2, ..., |DstVector|} -> G_UNMERGE_VALUES
   // Extracts the first chunk of the same size of the destination vector from the source
-  std::function<std::optional<int32_t>()> FirstQuarter =
-      adderGenerator(0, DstNumElts - 1, 1);
+  generator FirstQuarter = adderGenerator(0, DstNumElts - 1, 1);
   if (matchCombineShuffleVectorSimple(MI, FirstQuarter, DstNumElts - 1)) {
     if (SrcTy == DstTy || ((SrcNumElts / 2) % 2) != 0)
       return false;
@@ -405,8 +406,7 @@ bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
 
   // {|DstVector|, |DstVector|+1, ..., 2 * |DstVector|} -> G_UNMERGE_VALUES
   // Extracts the second chunk of the same size of the destination vector from the source
-  std::function<std::optional<int32_t>()> SecondQuarter =
-      adderGenerator(DstNumElts, (DstNumElts * 2) - 1, 1);
+  generator SecondQuarter = adderGenerator(DstNumElts, (DstNumElts * 2) - 1, 1);
   if (matchCombineShuffleVectorSimple(MI, SecondQuarter, DstNumElts - 1)) {
     if (((SrcNumElts / 2) % 2) != 0)
       return false;
@@ -418,14 +418,12 @@ bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
   // {1, 2, ..., n/4, n/2, n/2+1, .... 3n/4} -> G_UNMERGE_VALUES
   // Take the first halfs of the two vectors and concatenate them into one
   // vector.
-  std::function<std::optional<int32_t>()> FirstEightA =
-      adderGenerator(0, (DstNumElts / 2) - 1, 1);
-  std::function<std::optional<int32_t>()> FirstEightB =
+  generator FirstEightA = adderGenerator(0, (DstNumElts / 2) - 1, 1);
+  generator FirstEightB =
       adderGenerator(DstNumElts, DstNumElts + (DstNumElts / 2) - 1, 1);
 
-  std::function<std::optional<int32_t>()> FirstAndThird =
-      concatGenerators(SmallVector<std::function<std::optional<int32_t>()>>{
-          FirstEightA, FirstEightB});
+  generator FirstAndThird =
+      concatGenerators(SmallVector<generator>{FirstEightA, FirstEightB});
   if (matchCombineShuffleVectorSimple(MI, FirstAndThird,
                                       (DstNumElts / 2) - 1)) {
     if (DstNumElts <= 2)
@@ -443,6 +441,18 @@ bool CombinerHelper::tryCombineShuffleVector(MachineInstr &MI) {
     MI.eraseFromParent();
     return true;
   }
+
+  // {n/2, n/2+1, ..., n, 0, 1, ..., n/2-1}
+  generator FirstHalf = adderGenerator(0, SrcNumElts / 2, 1);
+  generator SecondHalf = adderGenerator(SrcNumElts / 2, SrcNumElts, 1);
+  generator Reverse =
+      concatGenerators(SmallVector<generator>{FirstHalf, SecondHalf});
+
+  if (matchCombineShuffleVectorSimple(MI, Reverse, SrcNumElts)) {
+    applyCombineShuffleVector(MI, {Ops[1], Ops[0]});
+    return true;
+  }
+
   return false;
 }
 
