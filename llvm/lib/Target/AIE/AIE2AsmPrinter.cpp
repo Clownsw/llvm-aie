@@ -71,11 +71,6 @@ bool AIE2AsmPrinter::lowerOperand(const MachineOperand &MO,
 }
 
 void AIE2AsmPrinter::emitInstruction(const MachineInstr *MI) {
-  // PseudoLoopEnd is just here to carry some extra information. No need to
-  // emit anything
-  if (MI->getOpcode() == AIE2::PseudoLoopEnd)
-    return;
-
   // Check whether there's a PseudoLoopEnd following. If so, emit the
   // last-bundle-label that it carries to designate this MI as the last bundle.
   const MachineInstr *LastBundle = nullptr;

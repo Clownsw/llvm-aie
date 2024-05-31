@@ -561,9 +561,15 @@ let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
 def LoopStart :
     Pseudo<(outs), (ins eR:$src), "loop_start", "${src}">;
 
-let hasSideEffects = 1,  mayLoad = 0, mayStore = 0, isBranch = 1, isTerminator = true in
-def PseudoLoopEnd :
-    Pseudo<(outs), (ins addr20:$target, addr20:$lastInstr), "pseudo_loop_end", "${target}, ${lastInstr}">;
+
+// PseudoLoopEnd represents the terminator of a ZOL. You can view it as a
+// conditional branch to the loop body. We make this a meta instruction,
+// since it doesn't need to be emitted itself, it only carries info for
+// its predecessor bundle
+let hasSideEffects = true, mayLoad = 0, mayStore = 0, isBranch = 1,
+    isTerminator = true, isMeta = true in
+def PseudoLoopEnd : Pseudo<(outs), (ins addr20:$target, addr20:$lastInstr),
+      "pseudo_loop_end", "${target}, ${lastInstr}">;
 
 // Pseudo Copy
 // Target specific impl. of isCopyInstrImp causes the MOVE to be deleted, the Pseudo is
