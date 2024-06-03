@@ -444,10 +444,35 @@ class WAWEdges : public ScheduleDAGMutation {
     auto *RI = static_cast<const AIEBaseRegisterInfo *>(TRI);
     LivePhysRegs LiveRegs;
     LiveRegs.init(*TRI);
-    // Reserved registers are considered always live
-    for (MCPhysReg PhysReg : MRI.getReservedRegs().set_bits()) {
-      if (RI->isSimplifiableReservedReg(PhysReg))
-        LiveRegs.addReg(PhysReg);
+    auto Scheduler = DAG->getBB()
+                         ? static_cast<AIEScheduleDAGMI *>(DAG)->getSchedImpl()
+                         : nullptr;
+    const BlockState *BS;
+    if (Scheduler) {
+      MachineBasicBlock *MBB = DAG->getBB();
+      BS = &(Scheduler->getInterBlock().getBlockState(MBB));
+      auto Region = BS->getCurrentRegion();
+      auto BottomRegion = BS->getBottom();
+      if (*Region.begin() == *BottomRegion.begin()) {
+        // If the region is bottom region, liveouts of region are same as
+        // liveouts of MBB
+        for (MCPhysReg Reg : BS->LiveOuts) {
+          LiveRegs.addReg(Reg);
+        }
+      } else {
+        // Else, liveins of succesor region will be the liveouts of current
+        // region
+        auto LiveIns = BS->getSuccessorRegion().getLiveIns();
+        for (MCPhysReg Reg : *LiveIns) {
+          LiveRegs.addReg(Reg);
+        }
+      }
+    } else {
+      // Reserved registers are considered always live
+      for (MCPhysReg PhysReg : MRI.getReservedRegs().set_bits()) {
+        if (RI->isSimplifiableReservedReg(PhysReg))
+          LiveRegs.addReg(PhysReg);
+      }
     }
     // Stores latest live write of physical register.
     std::map<Register, SUnit *> PhysRegWriters;
@@ -468,6 +493,20 @@ class WAWEdges : public ScheduleDAGMutation {
         }
       }
       LiveRegs.stepBackward(MI);
+    }
+    // Updating liveins of current region
+    if (Scheduler) {
+      MachineBasicBlock *MBB = DAG->getBB();
+      auto LiveIns = BS->getCurrentRegion().getLiveIns();
+      LiveIns->init(*TRI);
+      for (MCPhysReg Reg : LiveRegs) {
+        LiveIns->addReg(Reg);
+      }
+      LLVM_DEBUG({
+        dbgs() << MBB->getFullName() << ":Region" << BS->getCurrentRegionIndex()
+               << " LiveIns\n";
+        LiveIns->dump();
+      });
     }
     LLVM_DEBUG(dumpDependencies(DAG, SDep::Output, "WAW"));
   };

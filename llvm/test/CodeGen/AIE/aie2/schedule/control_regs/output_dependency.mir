@@ -19,8 +19,9 @@ body:             |
     ; CHECK-LABEL: name: test_waw
     ; CHECK: liveins: $r0, $r1
     ; CHECK-NEXT: {{  $}}
-    ; CHECK-NEXT: $crsat = MOVX_mvx_scl killed $r0
-    ; CHECK-NEXT: $crsat = MOV_mv_scl killed $r1
+    ; CHECK-NEXT: $crsat = MOVX_mvx_scl $r0 {
+    ; CHECK-NEXT:   $crsat = MOV_mv_scl killed $r1
+    ; CHECK-NEXT: }
     $crsat = MOVX_mvx_scl $r0
     $crsat = MOV_mv_scl $r1
 ...

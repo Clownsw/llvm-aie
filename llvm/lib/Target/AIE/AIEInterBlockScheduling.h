@@ -127,6 +127,7 @@ class Region {
   std::vector<MachineInstr *> SemanticOrder;
   // The instruction that starts the next region, if any
   MachineInstr *ExitInstr = nullptr;
+  LivePhysRegs *LiveIns = nullptr;
 
 public:
   Region(MachineBasicBlock *BB, MachineBasicBlock::iterator Begin,
@@ -137,6 +138,7 @@ public:
     if (End != BB->end()) {
       ExitInstr = &*End;
     }
+    LiveIns = new LivePhysRegs();
   }
   std::vector<MachineInstr *>::const_iterator begin() const {
     return SemanticOrder.begin();
@@ -145,6 +147,7 @@ public:
     return SemanticOrder.end();
   }
   MachineInstr *getExitInstr() const { return ExitInstr; }
+  LivePhysRegs *getLiveIns() { return LiveIns; }
 
   std::vector<MachineBundle> Bundles;
 };
@@ -179,6 +182,8 @@ public:
     Regions.emplace_back(BB, RegionBegin, RegionEnd);
   }
   auto getCurrentRegion() const { return Regions.at(CurrentRegion); }
+  auto getCurrentRegionIndex() const { return CurrentRegion; }
+  auto getSuccessorRegion() const { return Regions.at(CurrentRegion - 1); }
   const Region &getTop() const { return Regions.back(); }
   Region &getTop() { return Regions.back(); }
   const Region &getBottom() const { return Regions.front(); }

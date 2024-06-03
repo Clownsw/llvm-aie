@@ -10,7 +10,8 @@
 # RUN: cat %t.log | FileCheck %s --check-prefix=CHECK-LIVENESS
 # REQUIRES: asserts
 
-# These tests verify liveouts of every MachineBasicBlock in MachineFunction
+# These tests verify liveouts of every MachineBasicBlock in MachineFunction and 
+# liveins of every Region in MachineBasicBlock.
 
 #     bb.0
 #     /  \
@@ -31,6 +32,15 @@ body:             |
   ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r5 $r2
   ; CHECK-LIVENESS-NEXT: liveness_branch:BB3 LiveOuts
   ; CHECK-LIVENESS-NEXT:   Live Registers: (empty)
+
+  ; CHECK-LIVENESS-LABEL: test_liveness_branch:BB3:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r5 $r2
+  ; CHECK-LIVENESS-LABEL: test_liveness_branch:BB1:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r2 $r4
+  ; CHECK-LIVENESS-LABEL: test_liveness_branch:BB2:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r5 $r2 $r3 $r4
+  ; CHECK-LIVENESS-LABEL: test_liveness_branch:BB0:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r2 $r5 $r1
 
   bb.0:
     liveins: $r1, $r2, $r5
@@ -75,6 +85,13 @@ body:             |
   ; CHECK-LIVENESS-NEXT: liveness_selfloop:BB2 LiveOuts
   ; CHECK-LIVENESS-NEXT:   Live Registers: (empty)
 
+  ; CHECK-LIVENESS-LABEL: test_liveness_loop_1:BB1:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $amll0 $bml0 $amlh0 $r1 $lr $crfpmask $amll2 $bml2 $amlh2 $bml1 $amll1 $amlh1
+  ; CHECK-LIVENESS-LABEL: test_liveness_loop_1:BB2:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr
+  ; CHECK-LIVENESS-LABEL: test_liveness_loop_1:BB0:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $amlh0 $r0 $bml0 $amll0 $crfpmask $bml1 $amll1 $amlh1
+
   bb.0:
     liveins: $bml0, $bml1, $r0
     successors: %bb.1
@@ -117,6 +134,17 @@ body:             |
   ; CHECK-LIVENESS-NEXT:   Live Registers: $r1 $lr $r6 $r2 $r5
   ; CHECK-LIVENESS-NEXT: test_liveness_loop:BB4 LiveOuts
   ; CHECK-LIVENESS-NEXT:   Live Registers: (empty)
+
+  ; CHECK-LIVENESS-LABEL: test_liveness_loop_2:BB4:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr
+  ; CHECK-LIVENESS-LABEL: test_liveness_loop_2:BB3:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $r6 $lr $r5 $r2
+  ; CHECK-LIVENESS-LABEL: test_liveness_loop_2:BB1:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $r6 $lr $r2 $r4
+  ; CHECK-LIVENESS-LABEL: test_liveness_loop_2:BB2:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $r6 $lr $r5 $r2 $r3 $r4
+  ; CHECK-LIVENESS-LABEL: test_liveness_loop_2:BB0:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $r6 $lr $r2 $r5 $r1
 
   bb.0:
     liveins: $r1, $r2, $r5, $r6
@@ -185,6 +213,23 @@ body:             |
   ; CHECK-LIVENESS-NEXT: liveness_nested_loop:BB7 LiveOuts
   ; CHECK-LIVENESS-NEXT:   Live Registers: (empty)
 
+  ; CHECK-LIVENESS-LABEL: test_liveness_nested_loop:BB7:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r3 $r9 $srcarry
+  ; CHECK-LIVENESS-LABEL: test_liveness_nested_loop:BB6:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r3 $r9 $r0 $r4 $r6 $r1 $r2 $r8
+  ; CHECK-LIVENESS-LABEL: test_liveness_nested_loop:BB5:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r3 $r6 $r8 $r1 $r2 $r4 $r0 $srcarry
+  ; CHECK-LIVENESS-LABEL: test_liveness_nested_loop:BB3:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r3 $r6 $r8 $r0 $r2 $r4 $r1
+  ; CHECK-LIVENESS-LABEL: test_liveness_nested_loop:BB4:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r3 $r6 $r8 $srcarry $r2 $r4 $r0
+  ; CHECK-LIVENESS-LABEL: test_liveness_nested_loop:BB2:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r3 $r6 $r8 $r2 $r4 $srcarry $r1 $r0
+  ; CHECK-LIVENESS-LABEL: test_liveness_nested_loop:BB1:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r0 $r6 $r8 $r2 $r4 $r1
+  ; CHECK-LIVENESS-LABEL: test_liveness_nested_loop:BB0:Region0 LiveIns
+  ; CHECK-LIVENESS-NEXT:   Live Registers: $lr $r4 $r6 $r8 $r2 $r1
+  
   bb.0:
     successors: %bb.1
     liveins: $r1, $r2
