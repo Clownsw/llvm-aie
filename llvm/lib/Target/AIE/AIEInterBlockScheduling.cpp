@@ -430,9 +430,6 @@ int InterBlockScheduling::getCyclesToRespectTiming(
 
   const MachineBasicBlock &EpilogueMBB = *EpilogueBS.TheBlock;
   const MachineBasicBlock *LoopMBB = getSinglePredecessor(EpilogueMBB);
-  const auto &SubTarget = EpilogueMBB.getParent()->getSubtarget();
-  auto *TII = static_cast<const AIEBaseInstrInfo *>(SubTarget.getInstrInfo());
-  auto *ItinData = SubTarget.getInstrItineraryData();
 
   DEBUG_LOOPAWARE(dbgs() << "** Loop/Epilogue-carried latency dependencies:"
                          << " Original Loop " << *LoopMBB
@@ -472,7 +469,7 @@ int InterBlockScheduling::getCyclesToRespectTiming(
         auto *Succ = SDep.getSUnit();
 
         int Distance;
-        int Latency;
+        int Latency = SDep.getSignedLatency();
 
         if (!Edges.isPostBoundaryNode(Succ))
           continue;
@@ -481,12 +478,13 @@ int InterBlockScheduling::getCyclesToRespectTiming(
         // as successor ExitSU. In this case, if ExitSU is not far away
         // enough to ensure the correct behavior considering the
         // instructions that follow the epilogue (epilogue's successor),
-        // we need to insert nops. This affects spacially small epilogues.
+        // we need to insert nops. This affects especially small epilogues.
+        // Special handling is also needed because we have no instruction
+        // associated boundary nodes, so the mapping is not available.
         if (Succ->isBoundaryNode()) {
-          // We can consider the maximum depth+1 as depth of the
+          // We can consider the maximum DistFromLoopEntry as depth of the
           // ExitSU.
           Distance = DistFromLoopEntry - DistancesFromLoopEntry[PreBoundaryMI];
-          Latency = AIE::maxLatency(PreBoundaryMI, *TII, *ItinData, false);
           DEBUG_LOOPAWARE(dbgs() << "Sched boundary dependency found:\n"
                                  << " Loop instruction: " << *PreBoundaryMI
                                  << "\n Latency: " << Latency
@@ -496,7 +494,6 @@ int InterBlockScheduling::getCyclesToRespectTiming(
           const MachineInstr *PostBoundaryMI = Succ->getInstr();
           Distance = DistancesFromLoopEntry[PostBoundaryMI] -
                      DistancesFromLoopEntry[PreBoundaryMI];
-          Latency = SDep.getSignedLatency();
           DEBUG_LOOPAWARE(dbgs() << "Data dependency found:\n"
                                  << " Loop instruction: " << *PreBoundaryMI
                                  << " Epilogue instruction: " << *PostBoundaryMI
