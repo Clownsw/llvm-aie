@@ -70,6 +70,34 @@ bool AIE2AsmPrinter::lowerOperand(const MachineOperand &MO,
   return LowerAIEMachineOperandToMCOperand(MO, MCOp, *this);
 }
 
+void AIE2AsmPrinter::emitInstruction(const MachineInstr *MI) {
+  // PseudoLoopEnd is just here to carry some extra information. No need to
+  // emit anything
+  if (MI->getOpcode() == AIE2::PseudoLoopEnd)
+    return;
+
+  // Check whether there's a PseudoLoopEnd following. If so, emit the
+  // last-bundle-label that it carries to designate this MI as the last bundle.
+  const MachineInstr *LastBundle = nullptr;
+  const MachineInstr *LoopEnd = nullptr;
+  const MachineInstr *Prev = nullptr;
+  for (auto &MII : *MI->getParent()) {
+    if (MII.getOpcode() == AIE2::PseudoLoopEnd) {
+      LoopEnd = &MII;
+      LastBundle = Prev;
+      break;
+    }
+    Prev = &MII;
+  }
+
+  if (MI == LastBundle) {
+    MCSymbol *S = LoopEnd->getOperand(1).getMCSymbol();
+    OutStreamer->emitLabel(S);
+    OutStreamer->getCommentOS() << "Loop end.\n";
+  }
+  AIEBaseAsmPrinter::emitInstruction(MI);
+}
+
 AsmPrinter *
 llvm::createAIE2AsmPrinterPass(TargetMachine &TM,
                                std::unique_ptr<MCStreamer> &&Streamer) {
